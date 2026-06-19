@@ -1,0 +1,17 @@
+{
+  "restaurant": "Lezzet Durağı",
+  "currency": "TL",
+  "minimum_order": 100,
+  "working_hours": { "open": "09:00", "close": "23:00" },
+  "items": [
+    { "id": 1, "name": "Adana Kebap", "price": 220.0, "category": "ana_yemek", "variants": ["Scharf", "Mild"] },
+    { "id": 2, "name": "Tavuk Şiş", "price": 180.0, "category": "ana_yemek" },
+    { "id": 3, "name": "Lahmacun", "price": 70.0, "category": "ana_yemek" },
+    { "id": 4, "name": "Mercimek Çorbası", "price": 60.0, "category": "ana_yemek" },
+    { "id": 5, "name": "Künefe", "price": 110.0, "category": "tatli" },
+    { "id": 6, "name": "Ayran", "price": 25.0, "category": "icecek" },
+    { "id": 7, "name": "Döner", "price": 150.0, "category": "ana_yemek", "variants": ["Rindfleisch", "Hähnchenfleisch"] },
+    { "id": 8, "name": "Dürüm", "price": 130.0, "category": "ana_yemek", "variants": ["Rindfleisch", "Hähnchenfleisch"] },
+    { "id": 9, "name": "Kola", "price": 35.0, "category": "icecek" }
+  ]
+}

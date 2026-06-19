@@ -1,0 +1,6 @@
+.env
+orders.csv
+__pycache__/
+*.pyc
+venv/
+.venv/
