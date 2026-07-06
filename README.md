@@ -11,7 +11,7 @@ source of truth for money.
 
 ## What it does
 
-- Understands free-text orders across **Turkish, German, and English** —
+- Understands free-text orders across **Turkish, German, and English and extensible to other languages** —
   the bot detects whichever language the customer is writing in and replies
   in that language, including mid-conversation language switches. No
   language-selection prompt is ever shown to the customer.
@@ -69,17 +69,14 @@ decides.** This is enforced in three layers:
 
 ## Owner notifications
 
-Every confirmed order triggers a WhatsApp message to the restaurant owner,
-in Turkish, including the items, delivery address, total, customer note
-(if any), and the language the customer ordered in (e.g. "Müşteri Dili:
-Almanca") — useful context if the owner needs to call the customer back.
+Every confirmed order triggers a WhatsApp message to the restaurant owner, including the items, delivery address, total, customer note (if any), and the language the customer ordered in — useful context if the owner needs to call the customer back. The notification is sent in the owner's own language, configured via OWNER_LANG (English, German, or Turkish).
 
 ## Setup
 
 ### 1. Virtual environment
 
 ```bash
-cd whatsapp-bot
+cd whatsapp-oder-bot
 python3 -m venv venv
 source venv/bin/activate        # Windows: venv\Scripts\activate
 pip install -r requirements.txt
