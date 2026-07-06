@@ -174,3 +174,6 @@ python app.py
 - This is a sandbox/demo setup. Moving to a real customer requires a
   permanent server (instead of ngrok) and a registered WhatsApp Business
   number (instead of the Twilio sandbox).
+
+
+  Author : Batuhan Sevindik 
