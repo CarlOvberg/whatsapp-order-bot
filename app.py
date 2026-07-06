@@ -111,7 +111,22 @@ DEFAULT_LANG = "de"
 SUPPORTED_LANGS = ("de", "tr", "en")
 
 # Bildirimde işletme sahibine gösterilecek Türkçe dil etiketleri.
-LANG_LABELS_TR = {"de": "Almanca", "tr": "Türkçe", "en": "İngilizce"}
+# Owner-notification labels, in the owner's configured language (OWNER_LANG).
+OWNER_LABELS = {
+    "en": {"new_order": "🆕 New order", "address": "Address", "note": "Note",
+           "total": "Total", "customer_lang": "Customer language"},
+    "de": {"new_order": "🆕 Neue Bestellung", "address": "Adresse", "note": "Anmerkung",
+           "total": "Gesamt", "customer_lang": "Kundensprache"},
+    "tr": {"new_order": "🆕 Yeni sipariş", "address": "Adres", "note": "Not",
+           "total": "Toplam", "customer_lang": "Müşteri Dili"},
+}
+
+# Display name of the customer's language, shown in the owner's language.
+LANG_NAMES = {
+    "en": {"de": "German", "tr": "Turkish", "en": "English"},
+    "de": {"de": "Deutsch", "tr": "Türkisch", "en": "Englisch"},
+    "tr": {"de": "Almanca", "tr": "Türkçe", "en": "İngilizce"},
+}
 
 MESSAGES = {
     "empty": {
@@ -171,7 +186,9 @@ def msg(key: str, lang: str, **fmt) -> str:
     lang = normalize_lang(lang)
     text = MESSAGES[key].get(lang, MESSAGES[key][DEFAULT_LANG])
     return text.format(**fmt) if fmt else text
-
+    
+# Owner's preferred language for order notifications (independent of the customer's language).
+OWNER_LANG = normalize_lang(os.environ.get("OWNER_LANG", "en"))
 
 # Türkçe'ye özgü karakterler (Almanca'da bulunmaz: ş, ğ, ı, ç ve büyük İ).
 _TURKISH_CHARS = set("şğıçİ")
@@ -552,25 +569,27 @@ def save_order(sender: str, order: dict, total: float) -> None:
 # ---------------------------------------------------------------------------
 
 def notify_owner(sender: str, order: dict, total: float, lang: str = DEFAULT_LANG) -> None:
-    """Twilio REST client ile işletme sahibine sipariş özeti gönderir.
+    """Send an order summary to the restaurant owner via the Twilio REST client.
 
-    Bildirim etiketleri (Yeni sipariş, Adres, Toplam, Not) Türkçe kalır; ek olarak
-    müşterinin hangi dilde yazdığı "Müşteri Dili: ..." satırı olarak eklenir.
+    The notification is written in the owner's configured language (OWNER_LANG);
+    `lang` is the customer's detected language, shown as a "Customer language: ..." line.
     """
     if not (TWILIO_ACCOUNT_SID and TWILIO_AUTH_TOKEN and TWILIO_WHATSAPP_NUMBER and OWNER_WHATSAPP_NUMBER):
-        logger.warning("Twilio/owner bilgileri eksik, bildirim atlandı.")
+        logger.warning("Twilio/owner credentials missing, notification skipped.")
         return
 
-    lines = [f"🆕 Yeni sipariş ({sender}):"]
+    labels = OWNER_LABELS[OWNER_LANG]
+    lines = [f"{labels['new_order']} ({sender}):"]
     for item in order.get("items", []):
         lines.append(f"- {item.get('quantity')}x {item.get('name')}")
-    lines.append(f"Adres: {order.get('delivery_address', '-')}")
-    # Müşteri notu yalnızca doluysa eklenir; boşsa "Not:" satırı hiç görünmez.
+    lines.append(f"{labels['address']}: {order.get('delivery_address', '-')}")
+    # The note line appears only when a note exists; otherwise it is omitted.
     customer_note = (order.get("customer_note") or "").strip()
     if customer_note:
-        lines.append(f"Not: {customer_note}")
-    lines.append(f"Toplam: {total:.2f} {MENU.get('currency', 'TL')}")
-    lines.append(f"Müşteri Dili: {LANG_LABELS_TR.get(normalize_lang(lang), LANG_LABELS_TR[DEFAULT_LANG])}")
+        lines.append(f"{labels['note']}: {customer_note}")
+    lines.append(f"{labels['total']}: {total:.2f} {MENU.get('currency', 'TL')}")
+    customer_lang_name = LANG_NAMES[OWNER_LANG].get(normalize_lang(lang), normalize_lang(lang))
+    lines.append(f"{labels['customer_lang']}: {customer_lang_name}")
     summary = "\n".join(lines)
 
     try:
@@ -580,9 +599,8 @@ def notify_owner(sender: str, order: dict, total: float, lang: str = DEFAULT_LAN
             to=OWNER_WHATSAPP_NUMBER,
             body=summary,
         )
-    except Exception as exc:  # dış servis hatası akışı bozmamalı
-        logger.error("İşletme sahibine bildirim gönderilemedi: %s", exc)
-
+    except Exception as exc:  # external service failure must not break the flow
+        logger.error("Failed to notify owner: %s", exc)
 
 def reply(text: str) -> str:
     """Twilio'ya TwiML yanıtı üretir."""
