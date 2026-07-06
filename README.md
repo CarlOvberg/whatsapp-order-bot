@@ -11,7 +11,7 @@ source of truth for money.
 
 ## What it does
 
-- Understands free-text orders across **Turkish, German, and English and extensible to other languages** —
+- Understands free-text orders across Turkish, German, and English (extensible to other languages) - 
   the bot detects whichever language the customer is writing in and replies
   in that language, including mid-conversation language switches. No
   language-selection prompt is ever shown to the customer.
@@ -76,7 +76,7 @@ Every confirmed order triggers a WhatsApp message to the restaurant owner, inclu
 ### 1. Virtual environment
 
 ```bash
-cd whatsapp-oder-bot
+cd whatsapp-order-bot
 python3 -m venv venv
 source venv/bin/activate        # Windows: venv\Scripts\activate
 pip install -r requirements.txt
@@ -97,7 +97,7 @@ Fill in `.env`:
 | `TWILIO_WHATSAPP_NUMBER` | Sandbox number, format `whatsapp:+14155238886` |
 | `ANTHROPIC_API_KEY` | Anthropic Console → Settings → API Keys |
 | `OWNER_WHATSAPP_NUMBER` | Number that receives order notifications, format `whatsapp:+90XXXXXXXXXX` |
-
+| `OWNER_LANG` | Owner notification language: `en`, `de`, or `tr` (default `en`) |
 `.env` is git-ignored; real credentials never enter the repository.
 
 ### 3. Join the Twilio WhatsApp Sandbox
@@ -167,5 +167,6 @@ python app.py
   permanent server (instead of ngrok) and a registered WhatsApp Business
   number (instead of the Twilio sandbox).
 
+---
 
-  Author : Batuhan Sevindik 
+**Author:** Batuhan Sevindik
