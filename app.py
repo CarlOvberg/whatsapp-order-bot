@@ -1,9 +1,9 @@
 """
-WhatsApp üzerinden otomatik sipariş alan bot.
+Automated WhatsApp ordering bot.
 
-Akış: Twilio WhatsApp webhook -> Flask -> (güvenlik filtresi) -> Claude ile
-sipariş anlama -> kod tarafında doğrulama (fiyat her zaman koddan) ->
-CSV kaydı + işletme sahibine bildirim.
+Flow: Twilio WhatsApp webhook -> Flask -> (security filter) -> order
+understanding with Claude -> validation in code (price always from code) ->
+CSV logging + owner notification.
 """
 
 import os
@@ -21,7 +21,7 @@ from twilio.rest import Client as TwilioClient
 import anthropic
 
 # ---------------------------------------------------------------------------
-# Kurulum
+# Setup
 # ---------------------------------------------------------------------------
 
 load_dotenv()
@@ -32,7 +32,7 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 MENU_PATH = os.path.join(BASE_DIR, "menu.json")
 ORDERS_PATH = os.path.join(BASE_DIR, "orders.csv")
 
-# Tüm gizli değerler yalnızca environment'tan okunur — koda asla gömülmez.
+# All secrets are read only from the environment — never hard-coded.
 TWILIO_ACCOUNT_SID = os.environ.get("TWILIO_ACCOUNT_SID")
 TWILIO_AUTH_TOKEN = os.environ.get("TWILIO_AUTH_TOKEN")
 TWILIO_WHATSAPP_NUMBER = os.environ.get("TWILIO_WHATSAPP_NUMBER")
@@ -40,31 +40,31 @@ ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY")
 OWNER_WHATSAPP_NUMBER = os.environ.get("OWNER_WHATSAPP_NUMBER")
 
 CLAUDE_MODEL = "claude-sonnet-4-6"
-MAX_HISTORY = 10  # her müşteri için saklanacak en fazla mesaj sayısı
+MAX_HISTORY = 10  # maximum number of messages kept per customer
 
 app = Flask(__name__)
 
-# Menü dosyasını bir kez yükle.
+# Load the menu file once.
 with open(MENU_PATH, "r", encoding="utf-8") as f:
     MENU = json.load(f)
 
-# id -> ürün hızlı erişim tablosu (doğrulama ve fiyat hesabı için).
+# id -> product lookup table (for validation and price calculation).
 MENU_BY_ID = {int(item["id"]): item for item in MENU["items"]}
 
-# Anthropic client'ı (key yoksa None bırak, çağrıda kontrol et).
+# Anthropic client (leave None if no key; checked at call time).
 anthropic_client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY) if ANTHROPIC_API_KEY else None
 
-# In-memory konuşma geçmişi: telefon numarası -> mesaj listesi.
-# Her eleman {"role": "user"|"assistant", "content": "..."} biçiminde.
+# In-memory conversation history: phone number -> list of messages.
+# Each element has the form {"role": "user"|"assistant", "content": "..."}.
 conversations = defaultdict(list)
 
 
 # ---------------------------------------------------------------------------
-# 3) Prompt injection ön filtresi
+# 3) Prompt-injection pre-filter
 # ---------------------------------------------------------------------------
 
 SUSPICIOUS_PATTERNS = [
-    # Türkçe kalıplar
+    # Turkish patterns
     "talimat",
     "unut",
     "sistem prompt",
@@ -72,11 +72,11 @@ SUSPICIOUS_PATTERNS = [
     "admin",
     "ücretsiz yap",
     "indirim ekle",
-    # İngilizce kalıplar
+    # English patterns
     "ignore previous",
     "you are now",
     "developer mode",
-    # Almanca kalıplar (Almanca yazan müşterilerin manipülasyon denemeleri için)
+    # German patterns (for manipulation attempts by German-speaking customers)
     "anweisung",
     "vergiss",
     "administrator",
@@ -91,26 +91,25 @@ SUSPICIOUS_PATTERNS = [
 
 
 def looks_suspicious(message: str) -> bool:
-    """Mesajda bilinen manipülasyon kalıplarından biri var mı? (case-insensitive)"""
+    """Does the message contain one of the known manipulation patterns? (case-insensitive)"""
     lowered = message.lower()
     return any(pattern in lowered for pattern in SUSPICIOUS_PATTERNS)
 
 
 # ---------------------------------------------------------------------------
-# Çok dilli sabit mesajlar + basit dil tespiti
+# Multilingual fixed messages + simple language detection
 # ---------------------------------------------------------------------------
 #
-# Webhook'taki sabit (hard-coded) müşteri mesajları artık tek dilde değil.
-# Asıl çok dilli sipariş yanıtlarını Claude üretir; ancak Claude'a hiç
-# gitmeden dönen bu kısa sistem mesajları için ek bir Claude çağrısı yapmak
-# gereksiz maliyet/karmaşıklık olur. Bunun yerine üç sabit dilde (de/tr/en)
-# bir sözlük tutup, gelen mesajın dilini basit bir şekilde tahmin ediyoruz.
-# Belirsizse VARSAYILAN Almanca ("de") — hedef kitle ağırlıklı Alman.
+# The hard-coded customer messages in the webhook are no longer single-language.
+# Claude generates the actual multilingual order replies; but for these short
+# system messages that return without ever calling Claude, making an extra
+# Claude call would be unnecessary cost/complexity. Instead we keep a dictionary
+# in three fixed languages (de/tr/en) and roughly guess the incoming language.
+# If unclear, the DEFAULT is German ("de") — the target audience is mostly German.
 
 DEFAULT_LANG = "de"
 SUPPORTED_LANGS = ("de", "tr", "en")
 
-# Bildirimde işletme sahibine gösterilecek Türkçe dil etiketleri.
 # Owner-notification labels, in the owner's configured language (OWNER_LANG).
 OWNER_LABELS = {
     "en": {"new_order": "🆕 New order", "address": "Address", "note": "Note",
@@ -147,7 +146,7 @@ MESSAGES = {
         "en": "Your order has been cancelled and your cart has been emptied. "
               "You can place a new order anytime.",
     },
-    # {open} / {close} yer tutucuları çalışma saatleriyle doldurulur.
+    # {open} / {close} placeholders are filled with the working hours.
     "closed": {
         "de": "Wir haben derzeit geschlossen. Unsere Öffnungszeiten sind von "
               "{open} bis {close} Uhr.",
@@ -159,7 +158,7 @@ MESSAGES = {
         "tr": "Bir sorun oluştu. Lütfen siparişinizi tekrar belirtin.",
         "en": "Something went wrong. Please provide your order again.",
     },
-    # Claude bir alanı boş bırakırsa kullanılan yedek (fallback) metinler.
+    # Fallback texts used when Claude leaves a field empty.
     "fallback_confirmation": {
         "de": "Ihre Bestellung ist eingegangen, vielen Dank!",
         "tr": "Siparişiniz alındı, teşekkür ederiz!",
@@ -171,18 +170,18 @@ MESSAGES = {
         "tr": "Siparişinizi tamamlamak için bana biraz daha bilgi verebilir misiniz?",
         "en": "Could you please give me a bit more information to complete your order?",
     },
-    # Müşteriye gösterilen onay özetindeki toplam etiketi.
+    # The total label in the confirmation summary shown to the customer.
     "total_label": {"de": "Gesamt", "tr": "Toplam", "en": "Total"},
 }
 
 
 def normalize_lang(code) -> str:
-    """Bir dil kodunu desteklenen üç dilden birine indirger; aksi halde varsayılan."""
+    """Reduce a language code to one of the three supported languages; otherwise the default."""
     return code if code in SUPPORTED_LANGS else DEFAULT_LANG
 
 
 def msg(key: str, lang: str, **fmt) -> str:
-    """MESSAGES sözlüğünden ilgili dildeki metni getirir (gerekirse format'lar)."""
+    """Fetch the text for the given language from the MESSAGES dict (formatting if needed)."""
     lang = normalize_lang(lang)
     text = MESSAGES[key].get(lang, MESSAGES[key][DEFAULT_LANG])
     return text.format(**fmt) if fmt else text
@@ -190,7 +189,7 @@ def msg(key: str, lang: str, **fmt) -> str:
 # Owner's preferred language for order notifications (independent of the customer's language).
 OWNER_LANG = normalize_lang(os.environ.get("OWNER_LANG", "en"))
 
-# Türkçe'ye özgü karakterler (Almanca'da bulunmaz: ş, ğ, ı, ç ve büyük İ).
+# Turkish-specific characters (absent in German: ş, ğ, ı, ç and uppercase İ).
 _TURKISH_CHARS = set("şğıçİ")
 
 _TURKISH_WORDS = {
@@ -210,17 +209,17 @@ _ENGLISH_WORDS = {
 
 def detect_simple_language(text: str) -> str:
     """
-    Kütüphanesiz, çok basit dil tahmini. SADECE sabit sistem mesajlarını
-    (boş/şüpheli/iptal/kapalı/hata) doğru dilde göstermek için kullanılır;
-    asıl çok dilli yanıtları Claude üretir. Belirsizse varsayılan Almanca.
+    Library-free, very simple language guess. Used ONLY to show the fixed system
+    messages (empty/suspicious/cancel/closed/error) in the right language;
+    Claude generates the actual multilingual replies. Defaults to German if unclear.
 
-    Mantık: önce Türkçe'ye özgü karakterlere bak (kesin ipucu), sonra her dilin
-    yaygın kelimelerinden kaçını içerdiğini say. Eşitlik/0 durumunda Almanca.
+    Logic: first look at Turkish-specific characters (a definite clue), then count
+    how many of each language's common words appear. On a tie/0, German.
     """
     if not text:
         return DEFAULT_LANG
 
-    # Türkçe'ye özgü karakter varsa neredeyse kesin Türkçe.
+    # If a Turkish-specific character is present, it is almost certainly Turkish.
     if any(ch in _TURKISH_CHARS for ch in text):
         return "tr"
 
@@ -231,13 +230,13 @@ def detect_simple_language(text: str) -> str:
     de_score = len(words & _GERMAN_WORDS)
     en_score = len(words & _ENGLISH_WORDS)
 
-    # Almanca'ya özgü ä/ö/ü/ß karakterleri Almanca lehine ek ipucu.
+    # German-specific ä/ö/ü/ß characters are an extra clue in favor of German.
     if any(ch in text for ch in "äöüß"):
         de_score += 1
 
     best = max(tr_score, de_score, en_score)
     if best == 0:
-        return DEFAULT_LANG  # hiçbir ipucu yok -> varsayılan Almanca
+        return DEFAULT_LANG  # no clue at all -> default German
     if tr_score == best:
         return "tr"
     if en_score == best and en_score > de_score:
@@ -247,9 +246,9 @@ def detect_simple_language(text: str) -> str:
 
 def detect_sender_language(sender: str, incoming: str) -> str:
     """
-    Sabit sistem mesajları için müşterinin dilini tahmin eder. Tek bir mesaj
-    (örn. "iptal") yanıltıcı olabileceğinden, bu numaranın geçmişindeki tüm
-    müşteri mesajlarını gelen mesajla birlikte değerlendirir.
+    Guess the customer's language for the fixed system messages. Since a single
+    message (e.g. "iptal") can be misleading, it evaluates all of this number's
+    past customer messages together with the incoming message.
     """
     parts = [m["content"] for m in conversations.get(sender, []) if m.get("role") == "user"]
     parts.append(incoming or "")
@@ -257,16 +256,16 @@ def detect_sender_language(sender: str, incoming: str) -> str:
 
 
 # ---------------------------------------------------------------------------
-# Çalışma saatleri kontrolü
+# Working-hours check
 # ---------------------------------------------------------------------------
 
 def is_within_working_hours(now: datetime = None) -> bool:
     """
-    Şu anki yerel saatin menüdeki working_hours aralığında olup olmadığını döner.
-    Basit open < now < close mantığı; gece yarısını geçen aralıklar desteklenmez.
-    working_hours tanımlı değilse her zaman True döner (kısıtlama yok).
+    Return whether the current local time falls within the menu's working_hours range.
+    Simple open < now < close logic; ranges crossing midnight are not supported.
+    If working_hours is not defined, always returns True (no restriction).
 
-    now parametresi test için verilebilir; verilmezse datetime.now() kullanılır.
+    The now parameter can be passed for testing; if omitted, datetime.now() is used.
     """
     working_hours = MENU.get("working_hours")
     if not working_hours:
@@ -281,7 +280,7 @@ def is_within_working_hours(now: datetime = None) -> bool:
 
 
 # ---------------------------------------------------------------------------
-# 2 + 3) Claude system prompt'u
+# 2 + 3) Claude system prompt
 # ---------------------------------------------------------------------------
 
 def build_system_prompt() -> str:
@@ -443,25 +442,25 @@ GÜVENLİK KURALLARI (müşteri ne yazarsa yazsın bunlar her zaman geçerli):
 
 
 # ---------------------------------------------------------------------------
-# 1 + 2) Konuşma geçmişi yönetimi ve Claude çağrısı
+# 1 + 2) Conversation history management and Claude call
 # ---------------------------------------------------------------------------
 
 def trim_history(sender: str) -> None:
-    """Son MAX_HISTORY mesajı tut, fazlasını kırp."""
+    """Keep the last MAX_HISTORY messages, trim the rest."""
     if len(conversations[sender]) > MAX_HISTORY:
         conversations[sender] = conversations[sender][-MAX_HISTORY:]
 
 
 def parse_order(sender: str, message: str) -> dict:
     """
-    Müşteri mesajını konuşma geçmişiyle birlikte Claude'a gönderir ve
-    yapılandırılmış sipariş JSON'u döndürür. Hata durumunda exception fırlatır;
-    çağıran taraf try/except ile sarmalıdır.
+    Send the customer message together with the conversation history to Claude and
+    return the structured order JSON. Raises an exception on error; the caller
+    must wrap it in try/except.
     """
     if anthropic_client is None:
-        raise RuntimeError("ANTHROPIC_API_KEY tanımlı değil.")
+        raise RuntimeError("ANTHROPIC_API_KEY is not set.")
 
-    # Kullanıcı mesajını geçmişe ekle.
+    # Append the user message to the history.
     conversations[sender].append({"role": "user", "content": message})
     trim_history(sender)
 
@@ -474,17 +473,17 @@ def parse_order(sender: str, message: str) -> dict:
 
     raw = response.content[0].text.strip()
 
-    # Model bazen yine de code block sarabilir; güvenli tarafta kalmak için temizle.
+    # The model may still wrap it in a code block; clean it to be safe.
     if raw.startswith("```"):
         raw = raw.strip("`")
-        # "json" dil etiketini at
+        # drop the "json" language tag
         if raw.lower().startswith("json"):
             raw = raw[4:]
         raw = raw.strip()
 
     order = json.loads(raw)
 
-    # Asistan yanıtını geçmişe ekle (çok mesajlı akış için).
+    # Append the assistant response to the history (for the multi-message flow).
     conversations[sender].append({"role": "assistant", "content": raw})
     trim_history(sender)
 
@@ -492,20 +491,20 @@ def parse_order(sender: str, message: str) -> dict:
 
 
 # ---------------------------------------------------------------------------
-# 4) Çıktı doğrulama — para her zaman kodun kendisi tarafından hesaplanır
+# 4) Output validation — money is always computed by the code itself
 # ---------------------------------------------------------------------------
 
 def validate_order(order: dict):
     """
-    Claude çıktısındaki ürünlerin menüde var olduğunu doğrular ve toplamı
-    menüdeki gerçek fiyatlarla yeniden hesaplar. Modelin verdiği total ile
-    0.01 tolerans içinde uyuşmazsa siparişi reddeder.
+    Validate that the products in Claude's output exist in the menu and recompute
+    the total from the menu's real prices. If it does not match the model's total
+    within a 0.01 tolerance, the order is rejected.
 
-    Dönüş: (is_valid: bool, computed_total: float, error: str|None)
+    Returns: (is_valid: bool, computed_total: float, error: str|None)
     """
     items = order.get("items") or []
     if not items:
-        return False, 0.0, "Sipariş boş."
+        return False, 0.0, "Order is empty."
 
     computed_total = 0.0
     for item in items:
@@ -513,47 +512,47 @@ def validate_order(order: dict):
             item_id = int(item["id"])
             quantity = int(item["quantity"])
         except (KeyError, TypeError, ValueError):
-            return False, 0.0, "Geçersiz ürün formatı."
+            return False, 0.0, "Invalid product format."
 
         if item_id not in MENU_BY_ID:
-            return False, 0.0, f"Menüde olmayan ürün: id={item_id}"
+            return False, 0.0, f"Product not on the menu: id={item_id}"
         if quantity <= 0:
-            return False, 0.0, "Geçersiz adet."
+            return False, 0.0, "Invalid quantity."
 
-        # Fiyat MUTLAKA menüden alınır — modelin söylediği fiyata güvenilmez.
-        # Varyantlı ürünlerde (örn. "Döner (Tavuk)") yalnızca name değişir;
-        # fiyat her zaman id üzerinden menüdeki orijinal price alanından gelir.
+        # The price is ALWAYS taken from the menu — the model's price is never trusted.
+        # For variant products (e.g. "Döner (Tavuk)") only the name changes;
+        # the price always comes from the original price field in the menu, via id.
         computed_total += MENU_BY_ID[item_id]["price"] * quantity
 
     model_total = order.get("total")
     try:
         model_total = float(model_total)
     except (TypeError, ValueError):
-        return False, computed_total, "Model total alanı sayısal değil."
+        return False, computed_total, "The model's total field is not numeric."
 
     if abs(computed_total - model_total) > 0.01:
-        return False, computed_total, "Toplam tutar uyuşmuyor."
+        return False, computed_total, "Total amount does not match."
 
-    # Kod seviyesi minimum sepet kontrolü — model kuralı atlasa bile burada
-    # yakalanır. Fiyat zaten koddan hesaplandığı için bu doğal bir uzantı.
+    # Code-level minimum-order check — caught here even if the model skips the rule.
+    # A natural extension since the price is already computed in code.
     minimum_order = MENU.get("minimum_order", 0)
     if computed_total < minimum_order:
-        return False, computed_total, "Minimum sepet tutarının altında"
+        return False, computed_total, "Below the minimum order value"
 
     return True, computed_total, None
 
 
 # ---------------------------------------------------------------------------
-# 6) Sipariş kaydetme
+# 6) Order logging
 # ---------------------------------------------------------------------------
 
 def save_order(sender: str, order: dict, total: float) -> None:
-    """Siparişi orders.csv'ye append eder (UTF-8)."""
+    """Append the order to orders.csv (UTF-8)."""
     file_exists = os.path.isfile(ORDERS_PATH)
     with open(ORDERS_PATH, "a", newline="", encoding="utf-8") as f:
         writer = csv.writer(f)
         if not file_exists:
-            writer.writerow(["tarih", "numara", "urunler", "teslimat_adresi", "toplam", "musteri_notu"])
+            writer.writerow(["date", "phone", "items", "delivery_address", "total", "customer_note"])
         writer.writerow([
             datetime.now().isoformat(timespec="seconds"),
             sender,
@@ -565,7 +564,7 @@ def save_order(sender: str, order: dict, total: float) -> None:
 
 
 # ---------------------------------------------------------------------------
-# 7) İşletme sahibine bildirim
+# 7) Owner notification
 # ---------------------------------------------------------------------------
 
 def notify_owner(sender: str, order: dict, total: float, lang: str = DEFAULT_LANG) -> None:
@@ -603,7 +602,7 @@ def notify_owner(sender: str, order: dict, total: float, lang: str = DEFAULT_LAN
         logger.error("Failed to notify owner: %s", exc)
 
 def reply(text: str) -> str:
-    """Twilio'ya TwiML yanıtı üretir."""
+    """Build a TwiML response for Twilio."""
     resp = MessagingResponse()
     resp.message(text)
     return str(resp)
@@ -618,67 +617,67 @@ def webhook():
     incoming = (request.values.get("Body") or "").strip()
     sender = request.values.get("From") or "unknown"
 
-    # Sabit sistem mesajları için müşterinin dilini basitçe tahmin et
-    # (geçmiş + gelen mesaj). Asıl çok dilli yanıtları Claude üretir.
+    # Roughly guess the customer's language for the fixed system messages
+    # (history + incoming message). Claude generates the actual multilingual replies.
     lang = detect_sender_language(sender, incoming)
 
     if not incoming:
         return reply(msg("empty", lang))
 
-    # 3) Şüpheli pattern kontrolü — Claude'a hiç göndermeden direkt yanıt dön.
+    # 3) Suspicious-pattern check — respond directly without ever calling Claude.
     if looks_suspicious(incoming):
-        logger.info("Şüpheli mesaj engellendi (%s).", sender)
+        logger.info("Suspicious message blocked (%s).", sender)
         return reply(msg("suspicious", lang))
 
-    # "iptal" — bu numaranın sepetini/konuşma geçmişini tamamen sıfırla.
-    # Çalışma saati kontrolünden ÖNCE; kapalı saatte bile müşteri sepetini
-    # boşaltabilsin (yeni sipariş başlatamaz ama iptal her zaman çalışır).
-    # Türkçe büyük "İ" harfi standart .lower() ile "iptal"e dönüşmez; telefon
-    # otomatik büyük harfi "İptal" üretebileceği için önce İ->I normalize edilir.
+    # "iptal" (cancel) — completely reset this number's cart/conversation history.
+    # BEFORE the working-hours check, so the customer can clear the cart even when
+    # closed (they cannot start a new order, but cancel always works).
+    # The Turkish uppercase "İ" does not lower() to "iptal"; since the phone may
+    # auto-capitalize to "İptal", we first normalize İ->I.
     if incoming.replace("İ", "I").strip().lower() == "iptal":
         conversations.pop(sender, None)
-        logger.info("Sepet iptal edildi (%s).", sender)
+        logger.info("Cart cancelled (%s).", sender)
         return reply(msg("cancelled", lang))
 
-    # Çalışma saatleri kontrolü — kapalıysak Claude'a hiç gitmeden reddet.
+    # Working-hours check — if closed, reject without ever calling Claude.
     if not is_within_working_hours():
         wh = MENU.get("working_hours", {})
-        logger.info("Çalışma saati dışı mesaj (%s).", sender)
+        logger.info("Message outside working hours (%s).", sender)
         return reply(msg("closed", lang, open=wh.get("open"), close=wh.get("close")))
 
-    # parse_order'ı try/except ile sar.
+    # Wrap parse_order in try/except.
     try:
         order = parse_order(sender, incoming)
     except Exception as exc:
-        logger.error("parse_order hatası: %s", exc)
+        logger.error("parse_order error: %s", exc)
         return reply(msg("error", lang))
 
-    # Model bazen customer_note alanını unutabilir; akış hata vermesin diye
-    # boş string'e varsayılan olarak ayarla. Bu alan fiyatı etkilemez.
+    # The model may sometimes forget the customer_note field; default it to an
+    # empty string so the flow doesn't error. This field does not affect the price.
     if not isinstance(order.get("customer_note"), str):
         order["customer_note"] = ""
 
-    # Claude müşterinin dilini mesajı görerek tespit ettiği için yedek (fallback)
-    # metinlerde basit tahmin yerine onun "detected_language" alanını tercih et.
+    # Since Claude detects the customer's language by seeing the message, prefer its
+    # "detected_language" field over the simple guess for the fallback texts.
     reply_lang = normalize_lang(order.get("detected_language") or lang)
 
-    # Netleştirme gerekiyorsa (örn. adres) soruyu dön ve bekle.
+    # If clarification is needed (e.g. address), return the question and wait.
     if order.get("needs_clarification") or not order.get("order_complete"):
         question = order.get("clarification_question") or order.get("confirmation_message") \
             or msg("fallback_question", reply_lang)
         return reply(question)
 
-    # 4) Para doğrulaması — geçmezse siparişi reddet.
+    # 4) Money validation — reject the order if it fails.
     is_valid, total, error = validate_order(order)
     if not is_valid:
-        logger.info("Sipariş doğrulanamadı (%s): %s", sender, error)
+        logger.info("Order validation failed (%s): %s", sender, error)
         return reply(msg("error", reply_lang))
 
-    # Geçerli sipariş: kaydet + sahibe bildir + müşteriye onay.
+    # Valid order: save + notify owner + confirm to the customer.
     save_order(sender, order, total)
     notify_owner(sender, order, total, reply_lang)
 
-    # Sipariş tamamlandı: bu numaranın geçmişini sıfırla.
+    # Order complete: reset this number's history.
     conversations.pop(sender, None)
 
     confirmation = order.get("confirmation_message") or msg("fallback_confirmation", reply_lang)
@@ -688,7 +687,7 @@ def webhook():
 
 @app.route("/", methods=["GET"])
 def health():
-    return "WhatsApp sipariş botu çalışıyor."
+    return "WhatsApp order bot is running."
 
 
 if __name__ == "__main__":
