@@ -7,12 +7,7 @@ decision — price, product validity, totals — is independently recalculated
 and verified in code. The model is treated as an interpreter, never as the
 source of truth for money.
 
-**Context:** This project was built before starting Informatik studies at
-Paderborn University, during the German language preparation period (DSH).
-The motivation was practical: Turkish-owned restaurants in Germany lose
-13–30% of every order to delivery platform commissions (e.g. Lieferando).
-This bot lets them take orders directly over WhatsApp, at a fraction of
-that cost.
+**Context:** Small restaurants lose 13–30% of every order to delivery-platform commissions (e.g. Lieferando, Uber Eats). This bot lets any restaurant take orders directly over WhatsApp, at a fraction of that cost. It handles orders in multiple languages — currently Turkish, German, and English — and the architecture extends to more. I built it during my German-language preparation period before starting Informatik studies at Paderborn University.
 
 ## What it does
 
