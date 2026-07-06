@@ -9,6 +9,14 @@ source of truth for money.
 
 **Context:** Small restaurants lose 13–30% of every order to delivery-platform commissions (e.g. Lieferando, Uber Eats). This bot lets any restaurant take orders directly over WhatsApp, at a fraction of that cost. It handles orders in multiple languages — currently Turkish, German, and English — and the architecture extends to more. I built it during my German-language preparation period before starting Informatik studies at Paderborn University.
 
+## Demo
+
+A full order placed in German — the bot auto-detects the language and replies in it:
+
+![German order flow, part 1](assets/demo-de-1.png)
+
+![German order flow, part 2](assets/demo-de-2.png)
+
 ## What it does
 
 - Understands free-text orders across Turkish, German, and English (extensible to other languages) - 
